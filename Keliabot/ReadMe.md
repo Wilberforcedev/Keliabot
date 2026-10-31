@@ -61,6 +61,27 @@ Run the offline tests:
 python -m unittest test_paper_trading test_backtesting -v
 ```
 
+
+## Download historical Binance Spot data
+
+The downloader uses Binance's public market-data endpoint. It does not require API keys, connect to a user account, or place orders. Supported intervals are 1m, 5m, and 15m.
+
+Run from the \`Keliabot\` directory. The end date is exclusive and dates without a time are interpreted as UTC:
+
+\`\`\`bash
+python fetch_market_data.py --symbol BTCUSDT --interval 1m --start 2026-01-01 --end 2026-01-08
+python fetch_market_data.py --symbol BTCUSDT --interval 5m --start 2026-01-01 --end 2026-01-08
+python fetch_market_data.py --symbol BTCUSDT --interval 15m --start 2026-01-01 --end 2026-01-08
+\`\`\`
+
+By default, files are saved under \`data/\`, for example \`data/BTCUSDT_1m.csv\`. You can set \`--output\` to choose another path. The generated CSV includes open time, OHLC prices, volume, and close time and can be passed directly to the backtester:
+
+\`\`\`bash
+python run_backtest.py data/BTCUSDT_1m.csv --cash 1000 --fee 0.001 --fast 9 --slow 26
+\`\`\`
+
+Download only the date range and timeframe you need. Public endpoint availability and historical retention are subject to Binance service limits. Backtest output is historical analysis, not a prediction or trading recommendation.
+
 ## Testnet client helper
 
 `binance_clients.py` provides separate Spot and USD-M Futures Testnet client factories. It rejects a non-Testnet mode and keeps order submission disabled unless explicitly opted in. This helper is not yet wired into every legacy strategy script; those scripts remain experimental and should not be run until their execution paths have been reviewed and migrated.
