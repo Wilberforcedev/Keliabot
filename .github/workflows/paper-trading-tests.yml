@@ -17,4 +17,4 @@ jobs:
           python-version: "3.11"
       - name: Run offline simulator tests
         working-directory: Keliabot
-        run: python -m unittest test_paper_trading -v
+        run: python -m unittest test_paper_trading test_backtesting -v
