@@ -82,6 +82,24 @@ python run_backtest.py data/BTCUSDT_1m.csv --cash 1000 --fee 0.001 --fast 9 --sl
 
 Download only the date range and timeframe you need. Public endpoint availability and historical retention are subject to Binance service limits. Backtest output is historical analysis, not a prediction or trading recommendation.
 
+## Compare backtest timeframes
+
+After downloading comparable BTCUSDT data for the same UTC date range, generate one HTML report with shared strategy settings:
+
+\`\`\`bash
+python compare_timeframes.py --1m data/BTCUSDT_1m.csv --5m data/BTCUSDT_5m.csv --15m data/BTCUSDT_15m.csv --cash 1000 --fee 0.001 --fast 9 --slow 26
+\`\`\`
+
+Open \`timeframe_comparison.html\` in a browser. The report contains equity curves and a metrics table for ending equity, net P/L, return, maximum drawdown, closed trades, and win rate. You can compare only the intervals you have by supplying one or two of the CSV options. All intervals use the same starting cash, fee rate, and SMA periods.
+
+The report labels the highest historical return but does not declare a profitable or universally best timeframe. Make sure each input file covers the same date range. The equity curves plot recorded backtest observations in sequence; because candle intervals differ, observation counts are not directly time-aligned.
+
+Run all offline tests:
+
+\`\`\`bash
+python -m unittest test_paper_trading test_backtesting test_market_data test_compare_timeframes -v
+\`\`\`
+
 ## Testnet client helper
 
 `binance_clients.py` provides separate Spot and USD-M Futures Testnet client factories. It rejects a non-Testnet mode and keeps order submission disabled unless explicitly opted in. This helper is not yet wired into every legacy strategy script; those scripts remain experimental and should not be run until their execution paths have been reviewed and migrated.
