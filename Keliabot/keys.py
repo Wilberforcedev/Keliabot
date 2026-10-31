@@ -1,8 +1,8 @@
-"""Centralized Binance credentials loaded from environment variables.
-
-Never commit real API credentials. Copy .env.example to .env for local use.
-"""
+"""Centralized Binance credentials loaded from environment variables."""
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 api_key = os.getenv("BINANCE_API_KEY", "")
 api_secret = os.getenv("BINANCE_API_SECRET", "")
