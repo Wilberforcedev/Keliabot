@@ -11,3 +11,6 @@ __pycache__/
 # Virtual environments
 .venv/
 venv/
+
+# Downloaded historical market data (keep large datasets out of Git)
+data/*.csv
