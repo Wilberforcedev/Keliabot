@@ -1,10 +1,39 @@
-# Spot Trading bot summary .
-This is for a spot trading robot on binance that trrades BTCUSDT pair on an infinite loop, the bot gets the BUY & SELL signals form the RevisedHFTSwingSignalStrategy alias Puma 100 on trading view. the bot searches for signals from the market based on the stratgy, it handles one order at a time (however it can be adjusted in the code, for it to handle multiple) it places the orders and handles the profit and stops the losss at 1% 
-it will wait for 1 minute if it does not find a signal in the market, since it running an infinite loop checking for open positions, it will print positions if they are open but if theres none. it doesnt print. after the positions has closed after hitting the target, th bot will wait for 5 minutes because of the terms and conditions of binance, if the api receives many reqests the account gets banned which i am trying to avoid, as we had talked earlier about me setting it to 60 seconds.
+# Keliabot — Binance Trading Bot
 
-### How to run this bot project in your system?
-1. I assume by the time your here, you have received the file and unzipped it and already installed python running.
-2. Make sure you have Python installed in your system, and you have set its executeable path. you can download python for mac from here, hover over the link and press command + click to follow it *** https://www.python.org/downloads/ ***
-3. Ensure Python is in your environment. Type "***python --version***" in command prompt to check.
-4. Now install all the project requirements by typing the following command in your command prompt - "***pip install -r requirements.txt***" this will install  the things you need to run the trading bot.
-5. Enjoy the bot.
+A Python-based Binance trading bot prototype for BTC/USDT. The repository contains Spot and Futures strategy implementations. Trading involves substantial financial risk; this project is not financial advice and must be tested on Binance Testnet before any live use.
+
+## Security first
+
+Never put API keys or secrets directly in Python source files. Credentials are loaded from environment variables through python-dotenv.
+
+1. Revoke any API credentials that were previously committed to this repository. Removing a secret from the latest version does not remove it from Git history.
+2. Create a new Binance API key. Keep withdrawals disabled and grant only the permissions required for testing.
+3. Copy Keliabot/.env.example to Keliabot/.env and enter your new credentials.
+4. Never commit the local .env file. The root .gitignore excludes it.
+
+## Setup
+
+Use Python 3.10 or newer where possible:
+
+```bash
+cd Keliabot
+python -m venv .venv
+# Windows PowerShell: .venv\Scripts\Activate.ps1
+# macOS/Linux: source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+## Configuration
+
+Copy Keliabot/.env.example to Keliabot/.env and set BINANCE_API_KEY and BINANCE_API_SECRET. Do not share the resulting file.
+
+## Current files
+
+- main.py — Spot trading implementation.
+- BTCUSDT.py — Futures trading implementation.
+- ReasonSignal.py — alternate Futures strategy implementation.
+- keys.py — shared environment-based credential loader.
+
+## Important limitations
+
+This is an early-stage prototype. Order execution, exchange filters, stop-loss/take-profit handling, position sizing, and recovery from network/API failures still require review and testing. Do not run against a funded live account. The next development steps should add safe Testnet-only defaults, automated tests, and validated risk controls.
