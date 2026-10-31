@@ -58,7 +58,7 @@ The report includes ending equity, net P/L, return, closed trades, win rate, and
 Run the offline tests:
 
 ```bash
-python -m unittest test_paper_trading test_backtesting -v
+python -m unittest test_paper_trading test_backtesting test_market_data -v
 ```
 
 
