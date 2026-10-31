@@ -36,7 +36,7 @@ class BacktestingTests(unittest.TestCase):
     def test_loads_csv_case_insensitively(self):
         with TemporaryDirectory() as folder:
             path = Path(folder) / "prices.csv"
-            path.write_text("Open,Close\\n10,11\\n11,12\\n12,13\\n", encoding="utf-8")
+            path.write_text("Open,Close\n10,11\n11,12\n12,13\n", encoding="utf-8")
             rows = load_ohlcv_csv(path)
             self.assertEqual(rows[0]["open"], Decimal("10"))
             self.assertEqual(rows[-1]["close"], Decimal("13"))
