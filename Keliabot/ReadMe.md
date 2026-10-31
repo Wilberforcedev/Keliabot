@@ -40,6 +40,27 @@ print(account.summary(mark_price="61000"))
 
 The simulator supports spot-style buys and sells, fee accounting, balance checks, and mark-to-market equity. It does not place orders or connect to an exchange.
 
+
+## Historical backtesting (offline)
+
+Keliabot includes a simple long-only Spot SMA crossover backtester. It reads local historical candle CSV data and does not connect to Binance or submit orders. It uses the candle close to calculate signals and fills a signal at the next candle's open to avoid same-candle look-ahead. Fees are charged on both entry and exit. Any open position is marked to the final close for ending equity; it is not force-closed.
+
+CSV input requires a header with at least `open` and `close` columns (case-insensitive). Other columns such as timestamp, high, low, and volume may also be present.
+
+Run it from the `Keliabot` directory:
+
+```bash
+python run_backtest.py path/to/BTCUSDT.csv --cash 1000 --fee 0.001 --fast 9 --slow 26
+```
+
+The report includes ending equity, net P/L, return, closed trades, win rate, and maximum drawdown. Results depend on the input data, fee assumptions, and selected parameters. They do not predict future performance and do not account for slippage, spread, funding, liquidity, or exchange-specific execution constraints.
+
+Run the offline tests:
+
+```bash
+python -m unittest test_paper_trading test_backtesting -v
+```
+
 ## Testnet client helper
 
 `binance_clients.py` provides separate Spot and USD-M Futures Testnet client factories. It rejects a non-Testnet mode and keeps order submission disabled unless explicitly opted in. This helper is not yet wired into every legacy strategy script; those scripts remain experimental and should not be run until their execution paths have been reviewed and migrated.
