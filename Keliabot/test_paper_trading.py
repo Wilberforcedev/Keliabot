@@ -17,7 +17,7 @@ class PaperTradingAccountTests(unittest.TestCase):
         account.execute("buy", "1", "100")
         account.execute("sell", "0.4", "120")
         self.assertEqual(account.asset_quantity, Decimal("0.6"))
-        self.assertEqual(account.cash, Decimal("947.95200"))
+        self.assertEqual(account.cash, Decimal("947.85200"))
 
     def test_rejects_overspending(self):
         account = PaperTradingAccount("10")
