@@ -9,10 +9,7 @@ import warnings
 # Suppress specific FutureWarnings
 warnings.filterwarnings("ignore", category=FutureWarning, message="Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated")
 
-# API keys for Binance Futures Testnet
-api_key = '7e8d5c829586cb8492bd3af4113fb65b067996e5b88a0cbc40779878fc638bd6'
-api_secret = '54ebbf734193b69b32954f21a2f49462b43f8ae2814a7063df3bf54606cfd2da'
-
+from keys import api_key, api_secret
 # Initialize the Binance Futures Client for the Testnet
 spot_client = Client(api_key, api_secret, testnet=True)
 
