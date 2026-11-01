@@ -7,3 +7,5 @@ websocket-client
 python-dateutil
 pytz
 python-dotenv>=1.0.0
+
+streamlit>=1.40.0

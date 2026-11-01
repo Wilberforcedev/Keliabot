@@ -1,4 +1,4 @@
-from binance.client import Client
+from binance_clients import create_futures_client, assert_order_submission_enabled
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 import ta
 import numpy as np
@@ -11,10 +11,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, message="Downcasting o
 
 from keys import api_key, api_secret
 # Initialize the Binance Futures Client for the Testnet
-spot_client = Client(api_key, api_secret, testnet=True)
-
-# Set the testnet URL for futures
-spot_client.API_URL = 'https://testnet.binancefuture.com/fapi/v1/'
+spot_client = create_futures_client()
 
 tp = 0.01
 sl = 0.01
@@ -24,8 +21,7 @@ leverage = 10
 
 class TradingBot:
     def __init__(self, api_key, api_secret):
-        self.client = Client(api_key, api_secret, testnet=True)
-        self.client.API_URL = 'https://testnet.binancefuture.com/fapi/v1/'
+        self.client = create_futures_client()
         
         # Set leverage
         try:
@@ -125,6 +121,8 @@ class TradingBot:
         return None
 
     def open_order(self, symbol, side, volume):
+        # Testnet only; real order submission requires explicit opt-in.
+        assert_order_submission_enabled()
         price = self.get_btc_usdt_price()
         if price <= 0:
             print("Error: Price fetched is zero or negative.")

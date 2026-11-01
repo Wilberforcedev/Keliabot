@@ -1,6 +1,6 @@
 from sys import argv
 from keys import api_key, api_secret
-from binance.client import Client
+from binance_clients import create_spot_client, assert_order_submission_enabled
 import ta
 import numpy as np
 import pandas as pd
@@ -11,7 +11,7 @@ import warnings
 # Suppress specific FutureWarnings
 warnings.filterwarnings("ignore", category=FutureWarning, message="Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated")
 
-spot_client = Client(api_key, api_secret)
+spot_client = create_spot_client()
 
 tp = 0.01
 sl = 0.01
@@ -138,9 +138,11 @@ class TradingBot:
         return None
 
     def open_order(self, symbol, side, volume):
+        # Keep all legacy Spot order submissions on Testnet and disabled by default.
+        assert_order_submission_enabled()
         price = float(self.client.get_symbol_ticker(symbol=symbol)['price'])
-        qty_precision = self.get_qty_precision(symbol)[1]
-        price_precision = self.get_price_precision(symbol)[0]
+        qty_precision = self.get_qty_precision(symbol)
+        price_precision = self.get_price_precision(symbol)
         
         if qty_precision is None or price_precision is None:
             print("Error: Precision maths aint happening.")

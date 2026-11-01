@@ -100,6 +100,16 @@ Run all offline tests:
 python -m unittest test_paper_trading test_backtesting test_market_data test_compare_timeframes -v
 \`\`\`
 
+## Local dashboard
+
+Install dependencies, then start the offline dashboard from the `Keliabot` directory:
+
+```bash
+streamlit run dashboard.py
+```
+
+The dashboard provides Backtests, Paper Trading, and Trade History views. Its market data input is a local CSV file; paper-trade actions update only an in-memory simulator. It does not connect to Binance or submit exchange orders. The Testnet stop control is disabled because no Testnet execution service is connected.
+
 ## Testnet client helper
 
 `binance_clients.py` provides separate Spot and USD-M Futures Testnet client factories. It rejects a non-Testnet mode and keeps order submission disabled unless explicitly opted in. This helper is not yet wired into every legacy strategy script; those scripts remain experimental and should not be run until their execution paths have been reviewed and migrated.
