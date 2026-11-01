@@ -1,4 +1,5 @@
 from sys import argv
+from keys import api_key, api_secret
 from binance_clients import create_spot_client, assert_order_submission_enabled
 import ta
 import numpy as np
