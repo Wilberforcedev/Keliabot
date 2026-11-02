@@ -97,7 +97,7 @@ class TradingBot:
 
     def get_qty_precision(self, symbol):
         try:
-            exchange_info = spot_client.get_exchange_info()
+            exchange_info = self.client.get_exchange_info()
             print(f"Exchange info retrieved for symbol: {symbol}")  # Debugging
             for elem in exchange_info['symbols']:
                 if elem['symbol'] == symbol:
