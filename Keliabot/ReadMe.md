@@ -102,7 +102,7 @@ python -m unittest test_paper_trading test_backtesting test_market_data test_com
 
 ## Testnet client helper
 
-`binance_clients.py` provides separate Spot and USD-M Futures Testnet client factories. It rejects a non-Testnet mode and keeps order submission disabled unless explicitly opted in. `main.py` now uses the guarded Spot Testnet client; the legacy Futures scripts are not yet wired into this helper and remain experimental. Do not run those Futures scripts until their execution paths have been reviewed and migrated.
+`binance_clients.py` provides separate Spot and USD-M Futures Testnet client factories. It rejects a non-Testnet mode and keeps order submission disabled unless explicitly opted in. `main.py` now uses the guarded Spot Testnet client; `BTCUSDT.py`, `ReasonSignal.py`, and `test.py` are not yet wired into this helper and remain experimental. Do not run those scripts until their execution paths have been reviewed and migrated.
 
 Copy every setting from `.env.example` into `.env`:
 
