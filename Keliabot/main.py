@@ -1,6 +1,4 @@
-from sys import argv
-from keys import api_key, api_secret
-from binance.client import Client
+from binance_clients import create_spot_client, assert_order_submission_enabled
 import ta
 import numpy as np
 import pandas as pd
@@ -11,8 +9,6 @@ import warnings
 # Suppress specific FutureWarnings
 warnings.filterwarnings("ignore", category=FutureWarning, message="Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated")
 
-spot_client = Client(api_key, api_secret)
-
 tp = 0.01
 sl = 0.01
 symbol = 'BTCUSDT' 
@@ -21,9 +17,10 @@ qty = 0.001      #fixed amount for btcusdt
 leverage = 10 
 
 
-def get_balance_usdt():
+def get_balance_usdt(client=None):
+    client = client or create_spot_client()
     try:
-        response = spot_client.get_asset_balance(asset='USDT')
+        response = client.get_asset_balance(asset='USDT')
         free_balance = float(response['free'])
         return free_balance
     except BinanceAPIException as error:
@@ -42,12 +39,10 @@ def get_balance_usdt():
         print("An unexpected error occurred:", str(error))
     return 0.0
 
-balance = get_balance_usdt()
-print(f"Pamela Your balance is: {round(balance, 3)} USDT")
-
-def get_btc_usdt_price():
+def get_btc_usdt_price(client=None):
+    client = client or create_spot_client()
     try:
-        price_info = spot_client.get_symbol_ticker(symbol=symbol)
+        price_info = client.get_symbol_ticker(symbol=symbol)
         return float(price_info['price'])
     except BinanceAPIException as error:
         print(f"Binance API Exception: {error}")
@@ -57,23 +52,9 @@ def get_btc_usdt_price():
         print(f"An unexpected error occurred: {error}")
     return 0.0
 
-price = get_btc_usdt_price()
-print(f"BTC/USDT Current price is: {round(price, 3)} USDT")
-
-#  amount in USDT
-staking_amount = volume * price / 100  
-
-print(f"Pamela, Your stake is: {round(staking_amount, 3)} USDT")
-
-if balance < staking_amount:
-    print("Oooops, The balance is less than the minimum, Top Up.")
-else:
-    print("Your balance is sufficient, Let's gooo!.")
-
-
 class TradingBot:
-    def __init__(self, api_key, api_secret):
-        self.client = spot_client
+    def __init__(self):
+        self.client = create_spot_client()
 
     def klines(self, symbol, timeframe, limit=500, startTime=None, endTime=None):
         try:
@@ -93,7 +74,7 @@ class TradingBot:
 
     def get_price_precision(self, symbol):
         try:
-            exchange_info = spot_client.get_exchange_info()
+            exchange_info = self.client.get_exchange_info()
             print(f"Exchange info retrieved for symbol: {symbol}")  # Debugging
             for elem in exchange_info['symbols']:
                 if elem['symbol'] == symbol:
@@ -116,7 +97,7 @@ class TradingBot:
 
     def get_qty_precision(self, symbol):
         try:
-            exchange_info = spot_client.get_exchange_info()
+            exchange_info = self.client.get_exchange_info()
             print(f"Exchange info retrieved for symbol: {symbol}")  # Debugging
             for elem in exchange_info['symbols']:
                 if elem['symbol'] == symbol:
@@ -138,9 +119,10 @@ class TradingBot:
         return None
 
     def open_order(self, symbol, side, volume):
+        assert_order_submission_enabled()
         price = float(self.client.get_symbol_ticker(symbol=symbol)['price'])
-        qty_precision = self.get_qty_precision(symbol)[1]
-        price_precision = self.get_price_precision(symbol)[0]
+        qty_precision = self.get_qty_precision(symbol)
+        price_precision = self.get_price_precision(symbol)
         
         if qty_precision is None or price_precision is None:
             print("Error: Precision maths aint happening.")
@@ -192,6 +174,7 @@ class TradingBot:
         return []
 
     def close_open_orders(self, symbol):
+        assert_order_submission_enabled()
         try:
             response = self.client.cancel_open_orders(symbol=symbol)
             print(response)
@@ -203,6 +186,7 @@ class TradingBot:
             )
 
     def close_position(self, symbol, side, qty):
+        assert_order_submission_enabled()
         try:
             response = self.client.order_market(
                 symbol=symbol,
@@ -264,66 +248,71 @@ class RevisedHFTSwingSignalStrategy:
         self.data['position_size'] = np.where(self.data['position_size'] > self.max_position_size, self.max_position_size, self.data['position_size'])
         return self.data
 
-bot = TradingBot(api_key, api_secret)
-symbol = 'BTCUSDT'
-timeframe = '1m'
-order = False
+def main():
+    bot = TradingBot()
+    symbol = 'BTCUSDT'
+    timeframe = '1m'
+    order = False
 
-while True:
-    try:
-        
-        positions = bot.check_positions()
-
-        
-        if len(positions) > 0:
-            print(f'Pamela! You have {len(positions)} opened positions')
+    while True:
+        try:
             
-            #  profit  or stop loss  corner
-            for pos in positions:
-                side = pos['side']
-                qty = float(pos['origQty'])
-                entry_price = float(pos['price'])
-                current_price = float(bot.client.get_symbol_ticker(symbol=symbol)['price'])
-
-                if (side == 'SELL' and current_price <= entry_price * (1 - tp)) or (side == 'BUY' and current_price >= entry_price * (1 + tp)):
-                    bot.close_position(symbol, side, qty)
-                    print('Profit hit. Closing position and waiting for Just 5 minute...')
-                    sleep(300) 
-                elif (side == 'SELL' and current_price >= entry_price * (1 + sl)) or (side == 'BUY' and current_price <= entry_price * (1 - sl)):
-                    bot.close_position(symbol, side, qty)
-                    print('Stop loss hit. Closing position and waiting for 5 minutes...')
-                    sleep(300) 
-
-        if len(positions) == 0 and order:
-            print('No open positions. Waiting for 5 minutes...')
-            sleep(300) 
-            order = False
-
-        if not order:
-
-            df = bot.klines(symbol, timeframe, 500)
+            positions = bot.check_positions()
+    
             
-            #  trading signals
-            signal = bot.check_signal(df, balance)
+            if len(positions) > 0:
+                print(f'Pamela! You have {len(positions)} opened positions')
+                
+                #  profit  or stop loss  corner
+                for pos in positions:
+                    side = pos['side']
+                    qty = float(pos['origQty'])
+                    entry_price = float(pos['price'])
+                    current_price = float(bot.client.get_symbol_ticker(symbol=symbol)['price'])
+    
+                    if (side == 'SELL' and current_price <= entry_price * (1 - tp)) or (side == 'BUY' and current_price >= entry_price * (1 + tp)):
+                        bot.close_position(symbol, side, qty)
+                        print('Profit hit. Closing position and waiting for Just 5 minute...')
+                        sleep(300) 
+                    elif (side == 'SELL' and current_price >= entry_price * (1 + sl)) or (side == 'BUY' and current_price <= entry_price * (1 - sl)):
+                        bot.close_position(symbol, side, qty)
+                        print('Stop loss hit. Closing position and waiting for 5 minutes...')
+                        sleep(300) 
+    
+            if len(positions) == 0 and order:
+                print('No open positions. Waiting for 5 minutes...')
+                sleep(300) 
+                order = False
+    
+            if not order:
+    
+                df = bot.klines(symbol, timeframe, 500)
+                
+                #  trading signals
+                signal = bot.check_signal(df, get_balance_usdt(bot.client))
+                
+                if signal == 'up':
+                    print('Pamela, Found Buy signal for', symbol)
+                    sleep(1)
+                    print('Pamela, Placing order for', symbol)
+                    bot.open_order(symbol, 'buy', volume)
+                    order = True
+                elif signal == 'down':
+                    print('Pamela, Found Sell signal for', symbol)
+                    sleep(1)
+                    print('Pamela, Placing order for', symbol)
+                    bot.open_order(symbol, 'sell', volume)
+                    order = True
+                else:
+                    print('Pamela, No trade signal for', symbol)
             
-            if signal == 'up':
-                print('Pamela, Found Buy signal for', symbol)
-                sleep(1)
-                print('Pamela, Placing order for', symbol)
-                bot.open_order(symbol, 'buy', volume)
-                order = True
-            elif signal == 'down':
-                print('Pamela, Found Sell signal for', symbol)
-                sleep(1)
-                print('Pamela, Placing order for', symbol)
-                bot.open_order(symbol, 'sell', volume)
-                order = True
-            else:
-                print('Pamela, No trade signal for', symbol)
-        
-        print('Waiting 60 seconds...')
-        sleep(60)
-        
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        sleep(60)  
+            print('Waiting 60 seconds...')
+            sleep(60)
+            
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            sleep(60)  
+    
+
+if __name__ == "__main__":
+    main()
