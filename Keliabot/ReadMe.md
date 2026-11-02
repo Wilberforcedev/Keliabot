@@ -102,20 +102,20 @@ python -m unittest test_paper_trading test_backtesting test_market_data test_com
 
 ## Testnet client helper
 
-`binance_clients.py` provides separate Spot and USD-M Futures Testnet client factories. It rejects a non-Testnet mode and keeps order submission disabled unless explicitly opted in. `main.py` now uses the guarded Spot Testnet client; `BTCUSDT.py`, `ReasonSignal.py`, and `test.py` are not yet wired into this helper and remain experimental. Do not run those scripts until their execution paths have been reviewed and migrated.
+`binance_clients.py` provides separate Spot and USD-M Futures Testnet client factories. It rejects a non-Testnet mode and keeps order submission disabled unless explicitly opted in. `main.py`, `BTCUSDT.py`, `ReasonSignal.py`, and `test.py` now use the shared Testnet factories and order opt-in. The Futures scripts also require opt-in before changing leverage or margin settings. These strategies remain experimental and are not production-ready; the opt-in gate does not validate order lifecycle, risk sizing, or strategy behavior.
 
 Copy every setting from `.env.example` into `.env`:
 
 - `BINANCE_API_KEY` and `BINANCE_API_SECRET`: Testnet credentials only.
 - `KELIABOT_MODE=testnet`: the only supported mode in the helper.
-- `KELIABOT_ALLOW_ORDERS=false`: default; `main.py` will refuse order submission until this is explicitly changed to `true` for intentional Testnet use.
+- `KELIABOT_ALLOW_ORDERS=false`: default; all strategy scripts refuse order submission until this is explicitly changed to `true` for intentional Testnet use.
 
 ## Existing strategy files
 
 - `main.py` — legacy Spot strategy, routed through the guarded Spot Testnet client.
-- `BTCUSDT.py` — Futures strategy.
-- `ReasonSignal.py` — alternate Futures strategy.
-- `test.py` — legacy strategy experiment (not the offline unit-test suite).
+- `BTCUSDT.py` — experimental Futures strategy.
+- `ReasonSignal.py` — experimental alternate Futures strategy.
+- `test.py` — experimental Futures strategy (not the offline unit-test suite).
 - `keys.py` — shared environment-based credential loader.
 - `paper_trading.py` — offline simulator.
 - `test_paper_trading.py` — simulator unit tests.
