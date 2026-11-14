@@ -9,11 +9,12 @@ import unittest
 class _Client:
     """Minimal Spot client stub; records calls and replays order statuses."""
 
-    def __init__(self, statuses, executed="0.00040000", fail_poll=False, fail_oco=False):
+    def __init__(self, statuses, executed="0.00040000", fail_poll=False, fail_oco=0, fail_flatten=False):
         self.statuses = list(statuses)
         self.executed = executed
         self.fail_poll = fail_poll
-        self.fail_oco = fail_oco
+        self.oco_failures_left = fail_oco
+        self.fail_flatten = fail_flatten
         self.calls = []
 
     def get_symbol_ticker(self, **kwargs):
@@ -47,18 +48,22 @@ class _Client:
 
     def order_oco_sell(self, **kwargs):
         self.calls.append(("order_oco_sell", kwargs))
-        if self.fail_oco:
+        if self.oco_failures_left:
+            self.oco_failures_left -= 1
             raise self.exc(-2010, "insufficient balance")
         return {"ok": "oco_sell"}
 
     def order_oco_buy(self, **kwargs):
         self.calls.append(("order_oco_buy", kwargs))
-        if self.fail_oco:
+        if self.oco_failures_left:
+            self.oco_failures_left -= 1
             raise self.exc(-2010, "insufficient balance")
         return {"ok": "oco_buy"}
 
     def order_market(self, **kwargs):
         self.calls.append(("order_market", kwargs))
+        if self.fail_flatten:
+            raise self.exc(-2010, "insufficient balance")
         return {"ok": "market"}
 
     def names(self):
@@ -196,11 +201,32 @@ class SpotSequencingTests(unittest.TestCase):
 
         self.assertFalse([name for name in client.names() if name.startswith("order_oco")])
 
-    def test_rejected_oco_keeps_position_flag(self):
-        client = _Client(["FILLED"], fail_oco=True)
+    def test_oco_retries_before_succeeding(self):
+        client = _Client(["FILLED"], fail_oco=1)
         bot = self.make_bot(client)
 
         self.assertTrue(bot.open_order("BTCUSDT", "buy", 20.0))
+
+        self.assertEqual(client.names().count("order_oco_sell"), 2)
+        self.assertNotIn("order_market", client.names())
+        self.assertEqual(self.sleeps, [self.main.oco_retry_delay])
+
+    def test_persistent_oco_failure_flattens_position(self):
+        client = _Client(["FILLED"], fail_oco=99)
+        bot = self.make_bot(client)
+
+        self.assertFalse(bot.open_order("BTCUSDT", "buy", 20.0))
+
+        self.assertEqual(client.names().count("order_oco_sell"), self.main.oco_attempts)
+        self.assertEqual(client.params("order_market")["side"], "SELL")
+
+    def test_flatten_failure_keeps_position_flag(self):
+        client = _Client(["FILLED"], fail_oco=99, fail_flatten=True)
+        bot = self.make_bot(client)
+
+        self.assertTrue(bot.open_order("BTCUSDT", "buy", 20.0))
+
+        self.assertIn("order_market", client.names())
 
     def test_dust_entry_is_not_submitted(self):
         client = _Client(["FILLED"])

@@ -23,6 +23,8 @@ symbol = 'BTCUSDT'
 volume = 20.0     # USDT notional per entry
 fill_timeout = 30  # Seconds to wait for a limit entry to fill before cancelling
 poll_interval = 2  # Seconds between entry fill checks
+oco_attempts = 3   # Tries at the exit pair before flattening the position
+oco_retry_delay = 2  # Seconds between exit-pair attempts
 
 
 def get_balance_usdt(client=None):
@@ -149,11 +151,45 @@ class TradingBot:
                 return filled_qty
             sleep(interval)
 
+    def protect_position(self, symbol, entry_side, quantity, price, price_precision):
+        """Attach the OCO exit pair to a filled entry, retrying on rejection.
+
+        Returns True when the pair is in place, False when the position had to
+        be flattened, and None when flattening also failed.
+        """
+        if entry_side == 'buy':
+            # Long: take profit above entry, stop below; OCO needs limit > stop.
+            take_profit_price = round(price + price * tp, price_precision)
+            stop_price = round(price - price * sl, price_precision)
+            stop_limit_price = round(price - price * sl, price_precision)
+            place_oco = self.client.order_oco_sell
+        else:
+            # Short: take profit below entry, stop above; OCO needs limit < stop.
+            take_profit_price = round(price - price * tp, price_precision)
+            stop_price = round(price + price * sl, price_precision)
+            stop_limit_price = round(price + price * sl, price_precision)
+            place_oco = self.client.order_oco_buy
+
+        for attempt in range(1, oco_attempts + 1):
+            try:
+                print(place_oco(symbol=symbol, quantity=quantity, price=str(take_profit_price), stopPrice=str(stop_price), stopLimitPrice=str(stop_limit_price), stopLimitTimeInForce='GTC'))
+                return True
+            except BinanceAPIException as error:
+                print(f"OCO attempt {attempt}/{oco_attempts} failed. status: {error.status_code}, error code: {error.code}, error message: {error.message}")
+                if attempt < oco_attempts:
+                    sleep(oco_retry_delay)
+
+        print(f"No exit pair after {oco_attempts} attempts; flattening {symbol}.")
+        if self.close_position(symbol, entry_side, quantity):
+            return False
+        return None
+
     def open_order(self, symbol, side, volume):
         """Submit a limit entry, wait for the fill, then attach an OCO pair.
 
-        Returns True once the entry is filled; an unfilled entry is cancelled
-        and returns False. A rejected OCO does not make the caller re-enter.
+        Returns True while a position (protected or not) remains open, False
+        when nothing was left open: an unfilled entry, or a filled entry that
+        had to be flattened after the exit pair was rejected.
         """
         assert_order_submission_enabled()
         price = float(self.client.get_symbol_ticker(symbol=symbol)['price'])
@@ -169,7 +205,6 @@ class TradingBot:
             print(f"Error: {volume} USDT at {price} rounds to zero quantity; increase the entry notional.")
             return False
 
-        entry_filled = False
         if side == 'buy':
             try:
                 resp1 = self.client.order_limit_buy(symbol=symbol, quantity=qty, price=str(price))
@@ -181,20 +216,18 @@ class TradingBot:
                 if filled_qty <= 0:
                     print(f"Entry {resp1['orderId']} did not fill within {fill_timeout}s; no OCO placed.")
                     return False
-                entry_filled = True
-                # Long: take profit above entry, stop below; OCO needs limit > stop.
-                take_profit_price = round(price + price * tp, price_precision)
-                stop_price = round(price - price * sl, price_precision)
-                stop_limit_price = round(price - price * sl, price_precision)
-                resp2 = self.client.order_oco_sell(symbol=symbol, quantity=str(filled_qty), price=str(take_profit_price), stopPrice=str(stop_price), stopLimitPrice=str(stop_limit_price), stopLimitTimeInForce='GTC')
-                print(resp2)
+                outcome = self.protect_position(symbol, side, str(filled_qty), price, price_precision)
+                if outcome is None:
+                    print(f"{symbol}: exit pair failed and flattening failed too; the position may still be open.")
+                    return True
+                return outcome
             except BinanceAPIException as error:
                 print(
                     "Found error. status: {}, error code: {}, error message: {}".format(
                         error.status_code, error.code, error.message
                     )
                 )
-                return entry_filled
+                return False
         elif side == 'sell':
             try:
                 resp1 = self.client.order_limit_sell(symbol=symbol, quantity=qty, price=str(price))
@@ -206,21 +239,19 @@ class TradingBot:
                 if filled_qty <= 0:
                     print(f"Entry {resp1['orderId']} did not fill within {fill_timeout}s; no OCO placed.")
                     return False
-                entry_filled = True
-                # Short: take profit below entry, stop above; OCO needs limit < stop.
-                take_profit_price = round(price - price * tp, price_precision)
-                stop_price = round(price + price * sl, price_precision)
-                stop_limit_price = round(price + price * sl, price_precision)
-                resp2 = self.client.order_oco_buy(symbol=symbol, quantity=str(filled_qty), price=str(take_profit_price), stopPrice=str(stop_price), stopLimitPrice=str(stop_limit_price), stopLimitTimeInForce='GTC')
-                print(resp2)
+                outcome = self.protect_position(symbol, side, str(filled_qty), price, price_precision)
+                if outcome is None:
+                    print(f"{symbol}: exit pair failed and flattening failed too; the position may still be open.")
+                    return True
+                return outcome
             except BinanceAPIException as error:
                 print(
                     "Found error. status: {}, error code: {}, error message: {}".format(
                         error.status_code, error.code, error.message
                     )
                 )
-                return entry_filled
-        return True
+                return False
+        return False
 
     def check_positions(self):
         """Return open orders for the symbol.
@@ -240,7 +271,10 @@ class TradingBot:
         return []
 
     def close_position(self, symbol, side, qty):
-        """Market-close the position; Spot can only sell the balance held."""
+        """Market-close the position; Spot can only sell the balance held.
+
+        Returns True when the market order was accepted.
+        """
         assert_order_submission_enabled()
         try:
             response = self.client.order_market(
@@ -249,12 +283,14 @@ class TradingBot:
                 quantity=qty,
             )
             print(response)
+            return True
         except BinanceAPIException as error:
             print(
                 "Found error. status: {}, error code: {}, error message: {}".format(
                     error.status_code, error.code, error.message
                 )
             )
+        return False
 
     def check_signal(self, data, equity):
         """Return 'up'/'down' only on the candle where a signal flips on."""
