@@ -144,19 +144,23 @@ class TradingBot:
         return None
 
     def open_order(self, symbol, side, volume):
-        """Market-enter at or above the 100 USDT minimum, then attach a reduce-only stop."""
+        """Market-enter at or above the 100 USDT minimum, then attach a reduce-only stop.
+
+        Returns True once the entry is accepted; a rejected stop does not
+        make the caller re-enter.
+        """
         assert_order_submission_enabled()
         price = self.get_btc_usdt_price()
         if price <= 0:
             print("Error: Price fetched is zero or negative.")
-            return
+            return False
 
         qty_precision = self.get_qty_precision(symbol)
         price_precision = self.get_price_precision(symbol)
 
         if qty_precision is None or price_precision is None:
             print("Error: Could not fetch precision values.")
-            return
+            return False
 
         # Binance rejects orders below 100 USDT, so round the entry up to it.
         min_quantity = round(min_notional_value / price, qty_precision)
@@ -165,11 +169,13 @@ class TradingBot:
 
         if qty <= 0:
             print("Error: Calculated quantity is less than or equal to zero.")
-            return
+            return False
 
+        entry_placed = False
         try:
             if side == 'buy':
                 resp1 = self.client.futures_create_order(symbol=symbol, side='BUY', type='MARKET', quantity=qty)
+                entry_placed = True
                 if (qty * price) >= min_notional_value:
                     # reduceOnly keeps the stop from opening a short if the
                     # position is already closed.
@@ -178,12 +184,14 @@ class TradingBot:
                 print(resp1)
             elif side == 'sell':
                 resp1 = self.client.futures_create_order(symbol=symbol, side='SELL', type='MARKET', quantity=qty)
+                entry_placed = True
                 if (qty * price) >= min_notional_value:
                     resp2 = self.client.futures_create_order(symbol=symbol, side='BUY', type='STOP_MARKET', quantity=qty, stopPrice=str(price + price * sl), reduceOnly='true')
                     print(resp2)
                 print(resp1)
         except BinanceAPIException as error:
             print(f"Found error. status: {error.status_code}, error code: {error.code}, error message: {error.message}")
+        return entry_placed
 
     def check_positions(self):
         """Return futures positions whose positionAmt is non-zero."""
@@ -303,14 +311,12 @@ def main():
                     print('Pamela, Found Buy signal for', symbol)
                     sleep(1)
                     print('Pamela, Placing order for', symbol)
-                    bot.open_order(symbol, 'buy', volume)
-                    order = True
+                    order = bot.open_order(symbol, 'buy', volume)
                 elif signal == 'down':
                     print('Pamela, Found Sell signal for', symbol)
                     sleep(1)
                     print('Pamela, Placing order for', symbol)
-                    bot.open_order(symbol, 'sell', volume)
-                    order = True
+                    order = bot.open_order(symbol, 'sell', volume)
                 else:
                     print('Pamela, No trade signal for', symbol)
 

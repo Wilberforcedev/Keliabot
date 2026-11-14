@@ -114,7 +114,11 @@ class TradingBot:
         return None
 
     def open_order(self, symbol, side, volume):
-        """Market-enter, then attach a reduce-only stop-loss order."""
+        """Market-enter, then attach a reduce-only stop-loss order.
+
+        Returns True once the entry is accepted; a rejected stop does not
+        make the caller re-enter.
+        """
         assert_order_submission_enabled()
         price = float(self.client.futures_symbol_ticker(symbol=symbol)['price'])
         qty_precision = self.get_qty_precision(symbol)
@@ -122,17 +126,19 @@ class TradingBot:
 
         if qty_precision is None or price_precision is None:
             print("Error: Precision maths aint happening.")
-            return
+            return False
 
         qty = round((volume * leverage) / price, qty_precision)
 
         if qty <= 0:
             print("Error: Calculated quantity is less than or equal to zero.")
-            return
+            return False
 
+        entry_placed = False
         try:
             if side == 'buy':
                 resp1 = self.client.futures_create_order(symbol=symbol, side='BUY', type='MARKET', quantity=qty)
+                entry_placed = True
                 # reduceOnly keeps the stop from opening a short if the
                 # position is already closed.
                 resp2 = self.client.futures_create_order(symbol=symbol, side='SELL', type='STOP_MARKET', quantity=qty, stopPrice=str(price - price * sl), reduceOnly='true')
@@ -140,11 +146,13 @@ class TradingBot:
                 print(resp2)
             elif side == 'sell':
                 resp1 = self.client.futures_create_order(symbol=symbol, side='SELL', type='MARKET', quantity=qty)
+                entry_placed = True
                 resp2 = self.client.futures_create_order(symbol=symbol, side='BUY', type='STOP_MARKET', quantity=qty, stopPrice=str(price + price * sl), reduceOnly='true')
                 print(resp1)
                 print(resp2)
         except BinanceAPIException as error:
             print(f"Found error. status: {error.status_code}, error code: {error.code}, error message: {error.message}")
+        return entry_placed
 
     def check_positions(self):
         """Return futures positions whose positionAmt is non-zero."""
@@ -261,14 +269,12 @@ def main():
                     print('Pamela, Found Buy signal for', symbol)
                     sleep(1)
                     print('Pamela, Placing order for', symbol)
-                    bot.open_order(symbol, 'buy', volume)
-                    order = True
+                    order = bot.open_order(symbol, 'buy', volume)
                 elif signal == 'down':
                     print('Pamela, Found Sell signal for', symbol)
                     sleep(1)
                     print('Pamela, Placing order for', symbol)
-                    bot.open_order(symbol, 'sell', volume)
-                    order = True
+                    order = bot.open_order(symbol, 'sell', volume)
                 else:
                     print('Pamela, No trade signal for', symbol)
 

@@ -9,7 +9,7 @@ import ta
 import numpy as np
 import pandas as pd
 from decimal import Decimal
-from time import sleep
+from time import monotonic, sleep
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 import warnings
 
@@ -21,6 +21,8 @@ tp = 0.01
 sl = 0.01
 symbol = 'BTCUSDT'
 volume = 20.0     # USDT notional per entry
+fill_timeout = 30  # Seconds to wait for a limit entry to fill before cancelling
+poll_interval = 2  # Seconds between entry fill checks
 
 
 def get_balance_usdt(client=None):
@@ -109,8 +111,50 @@ class TradingBot:
             print(f"An unexpected error occurred: {e}")
         return None
 
+    def wait_for_entry_fill(self, symbol, order_id, timeout=fill_timeout, interval=poll_interval):
+        """Poll a submitted entry until it fills and return the executed quantity.
+
+        Spot OCO sells need the base asset to be free, so the exit pair can only
+        be placed after the entry fills. On timeout the unfilled remainder is
+        cancelled and whatever partially filled is returned. Returns None when
+        the state could not be confirmed.
+        """
+        deadline = monotonic() + timeout
+        filled_qty = 0.0
+        while True:
+            try:
+                order = self.client.get_order(symbol=symbol, orderId=order_id)
+            except BinanceAPIException as error:
+                print(
+                    "Could not confirm fill. status: {}, error code: {}, error message: {}".format(
+                        error.status_code, error.code, error.message
+                    )
+                )
+                return None
+
+            filled_qty = float(order['executedQty'])
+            if order['status'] == 'FILLED':
+                return filled_qty
+            if order['status'] in ('CANCELED', 'REJECTED', 'EXPIRED'):
+                return filled_qty
+            if monotonic() >= deadline:
+                try:
+                    self.client.cancel_order(symbol=symbol, orderId=order_id)
+                except BinanceAPIException as error:
+                    print(
+                        "Could not cancel unfilled entry. status: {}, error code: {}, error message: {}".format(
+                            error.status_code, error.code, error.message
+                        )
+                    )
+                return filled_qty
+            sleep(interval)
+
     def open_order(self, symbol, side, volume):
-        """Submit a limit entry, then attach an OCO take-profit/stop pair."""
+        """Submit a limit entry, wait for the fill, then attach an OCO pair.
+
+        Returns True once the entry is filled; an unfilled entry is cancelled
+        and returns False. A rejected OCO does not make the caller re-enter.
+        """
         assert_order_submission_enabled()
         price = float(self.client.get_symbol_ticker(symbol=symbol)['price'])
         qty_precision = self.get_qty_precision(symbol)
@@ -118,24 +162,31 @@ class TradingBot:
 
         if qty_precision is None or price_precision is None:
             print(f"Error: could not read exchange filters for {symbol}.")
-            return
+            return False
 
         qty = round(volume / price, qty_precision)
         if qty <= 0:
             print(f"Error: {volume} USDT at {price} rounds to zero quantity; increase the entry notional.")
-            return
+            return False
 
+        entry_filled = False
         if side == 'buy':
             try:
                 resp1 = self.client.order_limit_buy(symbol=symbol, quantity=qty, price=str(price))
                 print(symbol, side, "placing order now")
                 print(resp1)
-                sleep(2)
+                filled_qty = self.wait_for_entry_fill(symbol, resp1['orderId'])
+                if filled_qty is None:
+                    return True  # Unconfirmed: assume a position rather than re-enter.
+                if filled_qty <= 0:
+                    print(f"Entry {resp1['orderId']} did not fill within {fill_timeout}s; no OCO placed.")
+                    return False
+                entry_filled = True
                 # Long: take profit above entry, stop below; OCO needs limit > stop.
                 take_profit_price = round(price + price * tp, price_precision)
                 stop_price = round(price - price * sl, price_precision)
                 stop_limit_price = round(price - price * sl, price_precision)
-                resp2 = self.client.order_oco_sell(symbol=symbol, quantity=qty, price=str(take_profit_price), stopPrice=str(stop_price), stopLimitPrice=str(stop_limit_price), stopLimitTimeInForce='GTC')
+                resp2 = self.client.order_oco_sell(symbol=symbol, quantity=str(filled_qty), price=str(take_profit_price), stopPrice=str(stop_price), stopLimitPrice=str(stop_limit_price), stopLimitTimeInForce='GTC')
                 print(resp2)
             except BinanceAPIException as error:
                 print(
@@ -143,17 +194,24 @@ class TradingBot:
                         error.status_code, error.code, error.message
                     )
                 )
+                return entry_filled
         elif side == 'sell':
             try:
                 resp1 = self.client.order_limit_sell(symbol=symbol, quantity=qty, price=str(price))
                 print(symbol, side, "placing order now")
                 print(resp1)
-                sleep(2)
+                filled_qty = self.wait_for_entry_fill(symbol, resp1['orderId'])
+                if filled_qty is None:
+                    return True  # Unconfirmed: assume a position rather than re-enter.
+                if filled_qty <= 0:
+                    print(f"Entry {resp1['orderId']} did not fill within {fill_timeout}s; no OCO placed.")
+                    return False
+                entry_filled = True
                 # Short: take profit below entry, stop above; OCO needs limit < stop.
                 take_profit_price = round(price - price * tp, price_precision)
                 stop_price = round(price + price * sl, price_precision)
                 stop_limit_price = round(price + price * sl, price_precision)
-                resp2 = self.client.order_oco_buy(symbol=symbol, quantity=qty, price=str(take_profit_price), stopPrice=str(stop_price), stopLimitPrice=str(stop_limit_price), stopLimitTimeInForce='GTC')
+                resp2 = self.client.order_oco_buy(symbol=symbol, quantity=str(filled_qty), price=str(take_profit_price), stopPrice=str(stop_price), stopLimitPrice=str(stop_limit_price), stopLimitTimeInForce='GTC')
                 print(resp2)
             except BinanceAPIException as error:
                 print(
@@ -161,6 +219,8 @@ class TradingBot:
                         error.status_code, error.code, error.message
                     )
                 )
+                return entry_filled
+        return True
 
     def check_positions(self):
         """Return open orders for the symbol.
@@ -293,14 +353,12 @@ def main():
                     print('Pamela, Found Buy signal for', symbol)
                     sleep(1)
                     print('Pamela, Placing order for', symbol)
-                    bot.open_order(symbol, 'buy', volume)
-                    order = True
+                    order = bot.open_order(symbol, 'buy', volume)
                 elif signal == 'down':
                     print('Pamela, Found Sell signal for', symbol)
                     sleep(1)
                     print('Pamela, Placing order for', symbol)
-                    bot.open_order(symbol, 'sell', volume)
-                    order = True
+                    order = bot.open_order(symbol, 'sell', volume)
                 else:
                     print('Pamela, No trade signal for', symbol)
 
