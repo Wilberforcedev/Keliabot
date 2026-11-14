@@ -1,4 +1,4 @@
-from binance_clients import create_spot_client, assert_order_submission_enabled
+from binance_clients import create_spot_client, create_public_market_client, assert_order_submission_enabled
 import ta
 import numpy as np
 import pandas as pd
@@ -56,10 +56,11 @@ def get_btc_usdt_price(client=None):
 class TradingBot:
     def __init__(self):
         self.client = create_spot_client()
+        self.market_client = create_public_market_client()
 
     def klines(self, symbol, timeframe, limit=500, startTime=None, endTime=None):
         try:
-            resp = pd.DataFrame(self.client.get_klines(symbol=symbol, interval=timeframe, limit=limit, startTime=startTime, endTime=endTime))
+            resp = pd.DataFrame(self.market_client.get_klines(symbol=symbol, interval=timeframe, limit=limit, startTime=startTime, endTime=endTime))
             resp = resp.iloc[:, :6]
             resp.columns = ['Time', 'Open', 'High', 'Low', 'Close', 'Volume']
             resp = resp.set_index('Time')

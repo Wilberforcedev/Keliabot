@@ -35,9 +35,31 @@ def create_spot_client():
     return client
 
 
+def create_public_market_client():
+    """Create a credential-free client for public production market data.
+
+    Testnet kline history is sparse, so market data must come from the
+    production public endpoint while orders stay on Testnet.
+    """
+    client = Client()
+    client.API_URL = "https://api.binance.com/api"
+    return client
+
+
 def create_futures_client():
     """Create a USD-M Futures client pinned to Binance Futures Testnet."""
     key, secret = _credentials()
     client = Client(key, secret, testnet=True)
     client.FUTURES_URL = "https://testnet.binancefuture.com/fapi"
+    return client
+
+
+def create_public_futures_market_client():
+    """Create a credential-free client for public production Futures market data.
+
+    Testnet kline history is sparse, so market data must come from the
+    production public endpoint while orders stay on Testnet.
+    """
+    client = Client()
+    client.FUTURES_URL = "https://fapi.binance.com/fapi"
     return client

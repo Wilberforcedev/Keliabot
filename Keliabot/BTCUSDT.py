@@ -1,5 +1,5 @@
 from binance.exceptions import BinanceAPIException, BinanceRequestException
-from binance_clients import create_futures_client, assert_order_submission_enabled
+from binance_clients import create_futures_client, create_public_futures_market_client, assert_order_submission_enabled
 import ta
 import numpy as np
 import pandas as pd
@@ -20,6 +20,7 @@ class TradingBot:
     def __init__(self):
         assert_order_submission_enabled()
         self.client = create_futures_client()
+        self.market_client = create_public_futures_market_client()
         self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
 
     def get_balance_usdt(self):
@@ -50,7 +51,7 @@ class TradingBot:
 
     def klines(self, symbol, timeframe, limit=500, startTime=None, endTime=None):
         try:
-            resp = pd.DataFrame(self.client.futures_klines(symbol=symbol, interval=timeframe, limit=limit, startTime=startTime, endTime=endTime))
+            resp = pd.DataFrame(self.market_client.futures_klines(symbol=symbol, interval=timeframe, limit=limit, startTime=startTime, endTime=endTime))
             resp = resp.iloc[:, :6]
             resp.columns = ['Time', 'Open', 'High', 'Low', 'Close', 'Volume']
             resp = resp.set_index('Time')
