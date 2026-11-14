@@ -136,8 +136,10 @@ class TradingBot:
                 print(symbol, side, "placing order now")
                 print(resp1)
                 sleep(2)
-                sl_price = round(price - price * tp, price_precision)
-                resp2 = self.client.order_oco_sell(symbol=symbol, quantity=qty, price=str(sl_price), stopPrice=str(price - price * sl), stopLimitPrice=str(price - price * sl), stopLimitTimeInForce='GTC')
+                take_profit_price = round(price + price * tp, price_precision)
+                stop_price = round(price - price * sl, price_precision)
+                stop_limit_price = round(price - price * sl, price_precision)
+                resp2 = self.client.order_oco_sell(symbol=symbol, quantity=qty, price=str(take_profit_price), stopPrice=str(stop_price), stopLimitPrice=str(stop_limit_price), stopLimitTimeInForce='GTC')
                 print(resp2)
             except BinanceAPIException as error:
                 print(
@@ -151,8 +153,10 @@ class TradingBot:
                 print(symbol, side, "placing order now")
                 print(resp1)
                 sleep(2)
-                sl_price = round(price + price * tp, price_precision)
-                resp2 = self.client.order_oco_buy(symbol=symbol, quantity=qty, price=str(sl_price), stopPrice=str(price + price * sl), stopLimitPrice=str(price + price * sl), stopLimitTimeInForce='GTC')
+                take_profit_price = round(price - price * tp, price_precision)
+                stop_price = round(price + price * sl, price_precision)
+                stop_limit_price = round(price + price * sl, price_precision)
+                resp2 = self.client.order_oco_buy(symbol=symbol, quantity=qty, price=str(take_profit_price), stopPrice=str(stop_price), stopLimitPrice=str(stop_limit_price), stopLimitTimeInForce='GTC')
                 print(resp2)
             except BinanceAPIException as error:
                 print(

@@ -144,14 +144,14 @@ class TradingBot:
                 resp1 = self.client.futures_create_order(symbol=symbol, side='BUY', type='MARKET', quantity=qty)
                 sl_price = round(price - price * tp, price_precision)
                 if (qty * price) >= 100:  # Ensure notional value meets the minimum requirement
-                    resp2 = self.client.futures_create_order(symbol=symbol, side='SELL', type='STOP_MARKET', quantity=qty, stopPrice=str(price - price * sl))
+                    resp2 = self.client.futures_create_order(symbol=symbol, side='SELL', type='STOP_MARKET', quantity=qty, stopPrice=str(price - price * sl), reduceOnly='true')
                     print(resp2)
                 print(resp1)
             elif side == 'sell':
                 resp1 = self.client.futures_create_order(symbol=symbol, side='SELL', type='MARKET', quantity=qty)
                 sl_price = round(price + price * tp, price_precision)
                 if (qty * price) >= 100:  # Ensure notional value meets the minimum requirement
-                    resp2 = self.client.futures_create_order(symbol=symbol, side='BUY', type='STOP_MARKET', quantity=qty, stopPrice=str(price + price * sl))
+                    resp2 = self.client.futures_create_order(symbol=symbol, side='BUY', type='STOP_MARKET', quantity=qty, stopPrice=str(price + price * sl), reduceOnly='true')
                     print(resp2)
                 print(resp1)
         except BinanceAPIException as error:
@@ -172,7 +172,8 @@ class TradingBot:
                 symbol=symbol,
                 side='BUY' if side == 'SELL' else 'SELL',
                 type='MARKET',
-                quantity=qty
+                quantity=qty,
+                reduceOnly='true'
             )
             print(response)
         except BinanceAPIException as error:
@@ -236,11 +237,11 @@ def main():
                     entry_price = float(pos['entryPrice'])
                     current_price = float(bot.client.futures_symbol_ticker(symbol=symbol)['price'])
     
-                    if (side == 'SELL' and current_price >= entry_price * (1 + tp)) or (side == 'BUY' and current_price <= entry_price * (1 - tp)):
+                    if (side == 'SELL' and current_price <= entry_price * (1 - tp)) or (side == 'BUY' and current_price >= entry_price * (1 + tp)):
                         bot.close_position(symbol, side, qty)
                         print('Profit hit. Closing position and waiting for 5 minutes...')
                         sleep(300)
-                    elif (side == 'SELL' and current_price <= entry_price * (1 - sl)) or (side == 'BUY' and current_price >= entry_price * (1 + sl)):
+                    elif (side == 'SELL' and current_price >= entry_price * (1 + sl)) or (side == 'BUY' and current_price <= entry_price * (1 - sl)):
                         bot.close_position(symbol, side, qty)
                         print('Stop loss hit. Closing position and waiting for 5 minutes...')
                         sleep(300)
