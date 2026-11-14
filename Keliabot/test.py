@@ -1,3 +1,14 @@
+"""Futures strategy script (not the unit-test suite): SMA/base-line/RSI entries.
+
+Orders go to Binance Futures Testnet and stay disabled until
+KELIABOT_ALLOW_ORDERS=true. Market data comes from the public production
+Futures endpoint because Testnet kline history is too sparse for indicators.
+
+Near-duplicate of ReasonSignal.py. This copy rounds the entry up to Binance's
+100 USDT minimum notional before submitting. The offline suite lives in
+test_paper_trading.py, test_backtesting.py, test_market_data.py and
+test_compare_timeframes.py.
+"""
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 from binance_clients import create_futures_client, create_public_futures_market_client, assert_order_submission_enabled
 import ta
@@ -6,31 +17,33 @@ import pandas as pd
 from time import sleep
 import warnings
 
-# Suppress specific FutureWarnings
+# ta/pandas emit downcast warnings that are irrelevant to this strategy.
 warnings.filterwarnings("ignore", category=FutureWarning, message="Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated")
 
 
 
+# Take-profit and stop-loss distance as a fraction of the entry price.
 tp = 0.01
 sl = 0.01
 symbol = 'BTCUSDT'
-volume = 10  # Adjust this volume based on your account balance and desired position size
+volume = 10  # USDT notional per entry, multiplied by `leverage` before sizing
 leverage = 10
 min_notional_value = 100  # Minimum notional value required by Binance
 
 class TradingBot:
+    """Futures order plumbing plus the SMA/base-line/RSI signal check."""
+
     def __init__(self):
         assert_order_submission_enabled()
-        self.client = create_futures_client()
-        self.market_client = create_public_futures_market_client()
-        
-        # Set leverage
+        self.client = create_futures_client()                    # Testnet: balances and orders
+        self.market_client = create_public_futures_market_client()  # Production: public candles
+
         try:
             self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
         except BinanceAPIException as error:
             print(f"Error changing leverage. status: {error.status_code}, error code: {error.code}, error message: {error.message}")
-        
-        # Set margin type
+
+        # -4046 means the margin type is already set to the requested value.
         try:
             self.client.futures_change_margin_type(symbol=symbol, marginType='ISOLATED')
         except BinanceAPIException as error:
@@ -40,6 +53,7 @@ class TradingBot:
                 print(f"Error changing margin type. status: {error.status_code}, error code: {error.code}, error message: {error.message}")
 
     def get_balance_usdt(self):
+        """Return the USDT futures wallet balance, or 0.0 if the call fails."""
         try:
             response = self.client.futures_account_balance()
             for balance in response:
@@ -54,6 +68,7 @@ class TradingBot:
         return 0.0
 
     def get_btc_usdt_price(self):
+        """Return the current futures mark price, or 0.0 if the call fails."""
         try:
             price_info = self.client.futures_symbol_ticker(symbol=symbol)
             return float(price_info['price'])
@@ -66,6 +81,7 @@ class TradingBot:
         return 0.0
 
     def klines(self, symbol, timeframe, limit=500, startTime=None, endTime=None):
+        """Fetch raw futures OHLCV candles; the final row is still forming."""
         try:
             resp = pd.DataFrame(self.market_client.futures_klines(symbol=symbol, interval=timeframe, limit=limit, startTime=startTime, endTime=endTime))
             resp = resp.iloc[:, :6]
@@ -82,6 +98,11 @@ class TradingBot:
             print(f"An unexpected error occurred: {e}")
 
     def get_price_precision(self, symbol):
+        """Return decimals allowed by the PRICE_FILTER tick size.
+
+        String-based, so a tick size that Python renders in scientific
+        notation (e.g. 1e-05) would be misread.
+        """
         try:
             exchange_info = self.client.futures_exchange_info()
             for elem in exchange_info['symbols']:
@@ -102,6 +123,7 @@ class TradingBot:
         return None
 
     def get_qty_precision(self, symbol):
+        """Return decimals allowed by the LOT_SIZE step size (same caveat)."""
         try:
             exchange_info = self.client.futures_exchange_info()
             for elem in exchange_info['symbols']:
@@ -122,6 +144,7 @@ class TradingBot:
         return None
 
     def open_order(self, symbol, side, volume):
+        """Market-enter at or above the 100 USDT minimum, then attach a reduce-only stop."""
         assert_order_submission_enabled()
         price = self.get_btc_usdt_price()
         if price <= 0:
@@ -135,12 +158,10 @@ class TradingBot:
             print("Error: Could not fetch precision values.")
             return
 
-        # Calculate the minimum quantity required to meet the notional value
+        # Binance rejects orders below 100 USDT, so round the entry up to it.
         min_quantity = round(min_notional_value / price, qty_precision)
         qty = round((volume * leverage) / price, qty_precision)
-        qty = max(qty, min_quantity)  # Ensure minimum quantity
-
-        print(f"Calculated quantity: {qty}")  # Debugging statement
+        qty = max(qty, min_quantity)
 
         if qty <= 0:
             print("Error: Calculated quantity is less than or equal to zero.")
@@ -149,15 +170,15 @@ class TradingBot:
         try:
             if side == 'buy':
                 resp1 = self.client.futures_create_order(symbol=symbol, side='BUY', type='MARKET', quantity=qty)
-                sl_price = round(price - price * tp, price_precision)
-                if (qty * price) >= min_notional_value:  # Ensure notional value meets the minimum requirement
+                if (qty * price) >= min_notional_value:
+                    # reduceOnly keeps the stop from opening a short if the
+                    # position is already closed.
                     resp2 = self.client.futures_create_order(symbol=symbol, side='SELL', type='STOP_MARKET', quantity=qty, stopPrice=str(price - price * sl), reduceOnly='true')
                     print(resp2)
                 print(resp1)
             elif side == 'sell':
                 resp1 = self.client.futures_create_order(symbol=symbol, side='SELL', type='MARKET', quantity=qty)
-                sl_price = round(price + price * tp, price_precision)
-                if (qty * price) >= min_notional_value:  # Ensure notional value meets the minimum requirement
+                if (qty * price) >= min_notional_value:
                     resp2 = self.client.futures_create_order(symbol=symbol, side='BUY', type='STOP_MARKET', quantity=qty, stopPrice=str(price + price * sl), reduceOnly='true')
                     print(resp2)
                 print(resp1)
@@ -165,6 +186,7 @@ class TradingBot:
             print(f"Found error. status: {error.status_code}, error code: {error.code}, error message: {error.message}")
 
     def check_positions(self):
+        """Return futures positions whose positionAmt is non-zero."""
         try:
             open_positions = self.client.futures_position_information(symbol=symbol)
             return [pos for pos in open_positions if float(pos['positionAmt']) != 0]
@@ -173,6 +195,7 @@ class TradingBot:
         return []
 
     def close_position(self, symbol, side, qty):
+        """Market-close a position with a reduce-only order."""
         assert_order_submission_enabled()
         try:
             response = self.client.futures_create_order(
@@ -187,6 +210,7 @@ class TradingBot:
             print(f"Found error. status: {error.status_code}, error code: {error.code}, error message: {error.message}")
 
     def check_signal(self, data, equity):
+        """Return 'up'/'down' only on the candle where a signal flips on."""
         # The last kline is still forming; signals must only use closed candles.
         data = data.iloc[:-1].copy()
         strategy = RevisedHFTSwingSignalStrategy(data)
@@ -200,6 +224,13 @@ class TradingBot:
             return 'none'
 
 class RevisedHFTSwingSignalStrategy:
+    """SMA/base-line/RSI trend signals with an ATR-derived position size.
+
+    Long: close above fast SMA + ATR buffer, fast SMA above slow SMA, RSI < 70.
+    Short: close below fast SMA + ATR buffer, fast SMA below slow SMA, RSI > 30.
+    `position_size` is expressed in quote currency; main() trades `volume` instead.
+    """
+
     def __init__(self, data, fast_length=50, slow_length=100, length=14, base_atr_multiplier=1.5, risk_percent=0.01, max_position_size=0.1):
         self.data = data
         self.fast_length = fast_length
@@ -216,6 +247,7 @@ class RevisedHFTSwingSignalStrategy:
         self.data['base_line'] = self.data['fast_ma'] + self.base_atr_multiplier * self.data['atr']
 
     def calculate_position_size(self, equity, stop_loss):
+        """Risk-based size capped at max_position_size of equity."""
         if stop_loss == 0:
             return 0  # Avoid division by zero
         return min(equity * self.max_position_size, equity * self.risk_percent / stop_loss)
@@ -227,25 +259,27 @@ class RevisedHFTSwingSignalStrategy:
         return self.data
 
 def main():
+    """Poll position state every minute and trade a fresh signal flip."""
     bot = TradingBot()
     symbol = 'BTCUSDT'
     timeframe = '1m'
+    # Set once an entry is submitted so the bot waits for an exit before re-entering.
     order = False
 
     while True:
         try:
             positions = bot.check_positions()
-    
+
             if len(positions) > 0:
                 print(f'Pamela! You have {len(positions)} opened positions')
-    
-                # Profit or stop loss corner
+
+                # Take profit or stop loss corner. positionAmt is negative for shorts.
                 for pos in positions:
                     side = 'SELL' if float(pos['positionAmt']) < 0 else 'BUY'
                     qty = abs(float(pos['positionAmt']))
                     entry_price = float(pos['entryPrice'])
                     current_price = float(bot.client.futures_symbol_ticker(symbol=symbol)['price'])
-    
+
                     if (side == 'SELL' and current_price <= entry_price * (1 - tp)) or (side == 'BUY' and current_price >= entry_price * (1 + tp)):
                         bot.close_position(symbol, side, qty)
                         print('Profit hit. Closing position and waiting for 5 minutes...')
@@ -254,16 +288,17 @@ def main():
                         bot.close_position(symbol, side, qty)
                         print('Stop loss hit. Closing position and waiting for 5 minutes...')
                         sleep(300)
-    
+
             if len(positions) == 0 and order:
                 print('No open positions. Waiting for 5 minutes...')
                 sleep(300)
                 order = False
-    
+
             if not order:
+                # Closed candles only; check_signal drops the forming one.
                 df = bot.klines(symbol, timeframe, 500)
                 signal = bot.check_signal(df, bot.get_balance_usdt())
-    
+
                 if signal == 'up':
                     print('Pamela, Found Buy signal for', symbol)
                     sleep(1)
@@ -278,10 +313,10 @@ def main():
                     order = True
                 else:
                     print('Pamela, No trade signal for', symbol)
-    
+
             print('Waiting 60 seconds...')
             sleep(60)
-    
+
         except Exception as e:
             print(f"An error occurred: {e}")
             sleep(60)
