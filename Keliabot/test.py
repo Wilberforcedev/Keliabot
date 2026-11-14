@@ -186,6 +186,8 @@ class TradingBot:
             print(f"Found error. status: {error.status_code}, error code: {error.code}, error message: {error.message}")
 
     def check_signal(self, data, equity):
+        # The last kline is still forming; signals must only use closed candles.
+        data = data.iloc[:-1].copy()
         strategy = RevisedHFTSwingSignalStrategy(data)
         result = strategy.execute_strategy(equity)
         last_row = result.iloc[-1]

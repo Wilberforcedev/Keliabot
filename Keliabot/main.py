@@ -2,6 +2,7 @@ from binance_clients import create_spot_client, assert_order_submission_enabled
 import ta
 import numpy as np
 import pandas as pd
+from decimal import Decimal
 from time import sleep
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 import warnings
@@ -12,7 +13,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, message="Downcasting o
 tp = 0.01
 sl = 0.01
 symbol = 'BTCUSDT' 
-volume = 0.1
+volume = 20.0     # USDT notional per entry
 qty = 0.001      #fixed amount for btcusdt  
 leverage = 10 
 
@@ -81,8 +82,8 @@ class TradingBot:
                     print(f"Found symbol: {symbol}")  # Debugging line
                     for filter in elem['filters']:
                         if filter['filterType'] == 'PRICE_FILTER':
-                            tick_size = float(filter['tickSize'])
-                            price_precision = len(str(tick_size).split('.')[1].rstrip('0'))
+                            tick_size = Decimal(filter['tickSize'])
+                            price_precision = -tick_size.normalize().as_tuple().exponent
                             print(f"Price precision for {symbol}: {round(price_precision, 3)}")  # Debugging line
                             return price_precision
             print(f"Symbol {symbol} not found.")
@@ -104,8 +105,8 @@ class TradingBot:
                     print(f"Found symbol: {symbol}")  # Debugging line
                     for filter in elem['filters']:
                         if filter['filterType'] == 'LOT_SIZE':
-                            step_size = float(filter['stepSize'])
-                            qty_precision = len(str(step_size).split('.')[1].rstrip('0'))
+                            step_size = Decimal(filter['stepSize'])
+                            qty_precision = -step_size.normalize().as_tuple().exponent
                             print(f"Quantity precision for {symbol}: {round(qty_precision, 3)}")  # Debugging line
                             return qty_precision
             print(f"Symbol {symbol} not found.")
@@ -129,7 +130,11 @@ class TradingBot:
             return
         
         qty = round(volume / price, qty_precision)
-        
+
+        if qty <= 0:
+            print(f"Error: {volume} USDT at {price} rounds to zero quantity; increase the entry notional.")
+            return
+
         if side == 'buy':
             try:
                 resp1 = self.client.order_limit_buy(symbol=symbol, quantity=qty, price=str(price))
@@ -220,6 +225,8 @@ class TradingBot:
         return 0
 
     def check_signal(self, data, equity):
+        # The last kline is still forming; signals must only use closed candles.
+        data = data.iloc[:-1].copy()
         strategy = RevisedHFTSwingSignalStrategy(data)
         result = strategy.execute_strategy(equity)
         last_row = result.iloc[-1]
