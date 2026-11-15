@@ -1,8 +1,12 @@
-"""Offline stub tests for the Spot entry -> OCO sequencing in main.py.
+"""Offline stub tests for the order sequencing in the strategy scripts.
 
-The strategy modules need python-binance, ta, pandas and numpy, so this module
-skips itself when those imports fail instead of breaking a stdlib-only run.
+Covers the Spot entry -> OCO flow in main.py and the market entry ->
+reduce-only stop flow shared by ReasonSignal.py, BTCUSDT.py and test.py.
+The scripts need python-binance, ta, pandas and numpy, so this module skips
+itself when those imports fail instead of breaking a stdlib-only run.
 """
+import importlib.util
+import pathlib
 import unittest
 
 
@@ -74,6 +78,43 @@ class _Client:
             if called == name:
                 return kwargs
         return None
+
+
+class _FuturesClient:
+    """Minimal Futures client stub; records calls and fails orders on demand."""
+
+    def __init__(self, stop_failures=0, fail_flatten=False, price="50000.0", step="0.001"):
+        self.stop_failures_left = stop_failures
+        self.fail_flatten = fail_flatten
+        self.price = price
+        self.step = step
+        self.calls = []
+        self.exc = None
+
+    def futures_symbol_ticker(self, **kwargs):
+        return {"price": self.price}
+
+    def futures_exchange_info(self):
+        return {"symbols": [{"symbol": "BTCUSDT", "filters": [
+            {"filterType": "PRICE_FILTER", "tickSize": "0.10"},
+            {"filterType": "LOT_SIZE", "stepSize": self.step},
+        ]}]}
+
+    def futures_create_order(self, **kwargs):
+        self.calls.append(("futures_create_order", kwargs))
+        is_flatten = kwargs.get("type") == "MARKET" and kwargs.get("reduceOnly") == "true"
+        if kwargs.get("type") == "STOP_MARKET" and self.stop_failures_left:
+            self.stop_failures_left -= 1
+            raise self.exc(-2021, "Order would immediately trigger.")
+        if is_flatten and self.fail_flatten:
+            raise self.exc(-2019, "Margin is insufficient.")
+        return {"ok": kwargs.get("type")}
+
+    def names(self):
+        return [name for name, _ in self.calls]
+
+    def orders(self, order_type):
+        return [kwargs for _, kwargs in self.calls if kwargs.get("type") == order_type]
 
 
 class SpotSequencingTests(unittest.TestCase):
@@ -244,6 +285,142 @@ class SpotSequencingTests(unittest.TestCase):
         bot.close_position("BTCUSDT", "BUY", 0.0004)
 
         self.assertEqual(client.params("order_market")["side"], "SELL")
+
+
+class FuturesProtectionTests(unittest.TestCase):
+    """Retry-then-flatten stop protection shared by the three futures scripts."""
+
+    SCRIPT_NAMES = ("ReasonSignal", "BTCUSDT", "test")
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import binance_clients
+        except ImportError as error:
+            raise unittest.SkipTest(f"strategy dependencies unavailable: {error}")
+        cls.binance_clients = binance_clients
+        cls.modules = {}
+        for name in cls.SCRIPT_NAMES:
+            # Loaded by path because `test.py` would otherwise resolve to the
+            # standard library `test` package.
+            path = pathlib.Path(__file__).with_name(name + ".py")
+            try:
+                spec = importlib.util.spec_from_file_location(f"keliabot_{name.lower()}", path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+            except ImportError as error:
+                raise unittest.SkipTest(f"strategy dependencies unavailable: {error}")
+            cls.modules[name] = module
+
+    def setUp(self):
+        self.saved_allow_orders = self.binance_clients.ALLOW_ORDERS
+        self.saved_sleeps = {name: module.sleep for name, module in self.modules.items()}
+        self.binance_clients.ALLOW_ORDERS = True
+        self.sleeps = []
+        for module in self.modules.values():
+            module.sleep = self.fake_sleep
+        self.clock = 0.0
+
+    def tearDown(self):
+        self.binance_clients.ALLOW_ORDERS = self.saved_allow_orders
+        for name, fake in self.saved_sleeps.items():
+            self.modules[name].sleep = fake
+
+    def fake_sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.clock += seconds
+
+    def make_bot(self, module, client):
+        client.exc = self.make_exc(module)
+        bot = object.__new__(module.TradingBot)
+        bot.client = client
+        return bot
+
+    def make_exc(self, module):
+        def build(code, message):
+            return module.BinanceAPIException(None, code, '{{"code":{},"msg":"{}"}}'.format(code, message))
+        return build
+
+    def test_long_entry_places_reduce_only_stop(self):
+        for name, module in self.modules.items():
+            with self.subTest(script=name):
+                client = _FuturesClient()
+                bot = self.make_bot(module, client)
+
+                self.assertTrue(bot.open_order("BTCUSDT", "buy", module.volume))
+
+                entry, stop = client.orders("MARKET")[0], client.orders("STOP_MARKET")[0]
+                self.assertEqual(entry["side"], "BUY")
+                self.assertEqual(stop["side"], "SELL")
+                self.assertEqual(float(stop["stopPrice"]), 49500.0)
+                self.assertEqual(stop["reduceOnly"], "true")
+                self.assertEqual(float(stop["quantity"]), 0.002)
+
+    def test_short_entry_places_reduce_only_stop(self):
+        for name, module in self.modules.items():
+            with self.subTest(script=name):
+                client = _FuturesClient()
+                bot = self.make_bot(module, client)
+
+                bot.open_order("BTCUSDT", "sell", module.volume)
+
+                stop = client.orders("STOP_MARKET")[0]
+                self.assertEqual(stop["side"], "BUY")
+                self.assertEqual(float(stop["stopPrice"]), 50500.0)
+                self.assertEqual(stop["reduceOnly"], "true")
+
+    def test_stop_retries_before_succeeding(self):
+        for name, module in self.modules.items():
+            with self.subTest(script=name):
+                self.sleeps = []
+                client = _FuturesClient(stop_failures=1)
+                bot = self.make_bot(module, client)
+
+                self.assertTrue(bot.open_order("BTCUSDT", "buy", module.volume))
+
+                self.assertEqual(len(client.orders("STOP_MARKET")), 2)
+                self.assertEqual(self.sleeps, [module.stop_retry_delay])
+
+    def test_persistent_stop_failure_flattens_position(self):
+        for name, module in self.modules.items():
+            with self.subTest(script=name):
+                client = _FuturesClient(stop_failures=99)
+                bot = self.make_bot(module, client)
+
+                self.assertFalse(bot.open_order("BTCUSDT", "buy", module.volume))
+
+                self.assertEqual(len(client.orders("STOP_MARKET")), module.stop_attempts)
+                flatten = client.orders("MARKET")[-1]
+                self.assertEqual(flatten["side"], "SELL")
+                self.assertEqual(flatten["reduceOnly"], "true")
+
+    def test_flatten_failure_keeps_position_flag(self):
+        for name, module in self.modules.items():
+            with self.subTest(script=name):
+                client = _FuturesClient(stop_failures=99, fail_flatten=True)
+                bot = self.make_bot(module, client)
+
+                self.assertTrue(bot.open_order("BTCUSDT", "buy", module.volume))
+
+    def test_sub_min_notional_entry_skips_stop(self):
+        module = self.modules["ReasonSignal"]
+        client = _FuturesClient()
+        bot = self.make_bot(module, client)
+
+        self.assertTrue(bot.open_order("BTCUSDT", "buy", 5.0))
+
+        self.assertEqual(len(client.orders("MARKET")), 1)
+        self.assertEqual(client.orders("STOP_MARKET"), [])
+
+    def test_close_position_reports_outcome(self):
+        for name, module in self.modules.items():
+            with self.subTest(script=name):
+                client = _FuturesClient()
+                bot = self.make_bot(module, client)
+
+                self.assertTrue(bot.close_position("BTCUSDT", "BUY", 0.002))
+                self.assertFalse(self.make_bot(module, _FuturesClient(fail_flatten=True))
+                                 .close_position("BTCUSDT", "BUY", 0.002))
 
 
 if __name__ == "__main__":

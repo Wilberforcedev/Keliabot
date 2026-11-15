@@ -25,6 +25,8 @@ sl = 0.01
 symbol = 'BTCUSDT'
 volume = 10  # USDT notional per entry, multiplied by `leverage` before sizing
 leverage = 10
+stop_attempts = 3     # Tries at the stop before flattening the position
+stop_retry_delay = 2  # Seconds between stop attempts
 
 class TradingBot:
     """Futures order plumbing plus the SMA-cross signal check."""
@@ -113,11 +115,36 @@ class TradingBot:
             print(f"An unexpected error occurred: {e}")
         return None
 
+    def protect_position(self, symbol, entry_side, quantity, price):
+        """Place the reduce-only stop, retrying before flattening the position.
+
+        Returns True when the stop is in place, False when the position was
+        flattened instead, and None when flattening also failed.
+        """
+        stop_price = price - price * sl if entry_side == 'buy' else price + price * sl
+        exit_side = 'SELL' if entry_side == 'buy' else 'BUY'
+
+        for attempt in range(1, stop_attempts + 1):
+            try:
+                # reduceOnly keeps the stop from opening a position in the
+                # opposite direction if the position is already closed.
+                print(self.client.futures_create_order(symbol=symbol, side=exit_side, type='STOP_MARKET', quantity=quantity, stopPrice=str(stop_price), reduceOnly='true'))
+                return True
+            except BinanceAPIException as error:
+                print(f"Stop attempt {attempt}/{stop_attempts} failed. status: {error.status_code}, error code: {error.code}, error message: {error.message}")
+                if attempt < stop_attempts:
+                    sleep(stop_retry_delay)
+
+        print(f"No stop after {stop_attempts} attempts; flattening {symbol}.")
+        if self.close_position(symbol, entry_side, quantity):
+            return False
+        return None
+
     def open_order(self, symbol, side, volume):
         """Market-enter, then attach a reduce-only stop-loss order.
 
-        Returns True once the entry is accepted; a rejected stop does not
-        make the caller re-enter.
+        Returns True while a position (protected or not) remains open, False
+        when the entry failed or had to be flattened.
         """
         assert_order_submission_enabled()
         price = float(self.client.futures_symbol_ticker(symbol=symbol)['price'])
@@ -134,25 +161,23 @@ class TradingBot:
             print("Error: Calculated quantity is less than or equal to zero.")
             return False
 
-        entry_placed = False
         try:
             if side == 'buy':
                 resp1 = self.client.futures_create_order(symbol=symbol, side='BUY', type='MARKET', quantity=qty)
-                entry_placed = True
-                # reduceOnly keeps the stop from opening a short if the
-                # position is already closed.
-                resp2 = self.client.futures_create_order(symbol=symbol, side='SELL', type='STOP_MARKET', quantity=qty, stopPrice=str(price - price * sl), reduceOnly='true')
-                print(resp1)
-                print(resp2)
             elif side == 'sell':
                 resp1 = self.client.futures_create_order(symbol=symbol, side='SELL', type='MARKET', quantity=qty)
-                entry_placed = True
-                resp2 = self.client.futures_create_order(symbol=symbol, side='BUY', type='STOP_MARKET', quantity=qty, stopPrice=str(price + price * sl), reduceOnly='true')
-                print(resp1)
-                print(resp2)
+            else:
+                return False
+            print(resp1)
         except BinanceAPIException as error:
             print(f"Found error. status: {error.status_code}, error code: {error.code}, error message: {error.message}")
-        return entry_placed
+            return False
+
+        outcome = self.protect_position(symbol, side, qty, price)
+        if outcome is None:
+            print(f"{symbol}: stop failed and flattening failed too; the position may still be open.")
+            return True
+        return outcome
 
     def check_positions(self):
         """Return futures positions whose positionAmt is non-zero."""
@@ -164,7 +189,10 @@ class TradingBot:
         return []
 
     def close_position(self, symbol, side, qty):
-        """Market-close a position with a reduce-only order."""
+        """Market-close a position with a reduce-only order.
+
+        Returns True when the flattening order was accepted, False otherwise.
+        """
         assert_order_submission_enabled()
         try:
             response = self.client.futures_create_order(
@@ -175,8 +203,10 @@ class TradingBot:
                 reduceOnly='true'
             )
             print(response)
+            return True
         except BinanceAPIException as error:
             print(f"Found error. status: {error.status_code}, error code: {error.code}, error message: {error.message}")
+            return False
 
     def check_signal(self, data, equity):
         """Return 'up'/'down' only on the candle where a signal flips on."""
